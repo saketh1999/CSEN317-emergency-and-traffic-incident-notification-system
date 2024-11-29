@@ -1,35 +1,67 @@
-# locust
 from locust import HttpUser, task, between
 
-class ProducerUser(HttpUser):
+class MessageProducerSimulation(HttpUser):
+    # Configuration for the producer service endpoint
     host = "http://127.0.0.1:5000"
+    
+    # Randomize wait time between 1-2 seconds to simulate realistic user behavior
     wait_time = between(1, 2)
 
     @task
-    def publish_internal(self):
+    def send_internal_message(self):
+        """
+        Simulate sending an internal message with multiple events
+        Mimics a typical internal communication scenario
+        """
         self.client.post("/publish", json={
-            "message": "test message",
-            "topic": "internal",
-            "events": ["event1", "event2"]
+            "message": "system notification",
+            "topic": "company_updates",
+            "events": ["quarterly_review", "team_meeting"]
         })
 
     @task
-    def publish_external(self):
+    def send_external_message(self):
+        """
+        Simulate sending an external communication
+        With minimal payload to test basic publishing
+        """
         self.client.post("/publish", json={
-            "topic": "external"
+            "topic": "partner_communications"
         })
 
     @task
-    def broadcast_message(self):
-        self.client.post("/broadcast", json={"message": "urgent broadcast"})
+    def send_urgent_broadcast(self):
+        """
+        Simulate sending an urgent broadcast message
+        Simulates emergency or high-priority communication
+        """
+        self.client.post("/broadcast", json={"message": "critical system alert"})
 
-class ConsumerUser(HttpUser):
+class MessageConsumerSimulation(HttpUser):
+    # Configuration for the consumer service endpoint
     host = "http://127.0.0.1:5001"
+    
+    # Randomize wait time between 1-2 seconds to simulate realistic user behavior
     wait_time = between(1, 2)
 
     @task
-    def subscribe_topic(self):
-        self.client.post("/subscribe", json={"username": "user1", "topic": "internal"})
+    def register_topic_subscription(self):
+        """
+        Simulate a user subscribing to a specific topic
+        Demonstrates topic-based message filtering
+        """
+        self.client.post("/subscribe", json={
+            "username": "system_operator", 
+            "topic": "company_updates"
+        })
+
     @task
-    def unsubscribe_topic(self):
-        self.client.post("/unsubscribe", json={"username": "user1", "topic": "internal"})
+    def remove_topic_subscription(self):
+        """
+        Simulate a user unsubscribing from a topic
+        Tests subscription management functionality
+        """
+        self.client.post("/unsubscribe", json={
+            "username": "system_operator", 
+            "topic": "company_updates"
+        })
