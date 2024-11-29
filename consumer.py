@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
-from threading import Thread, Lock
+from threading import Thread
 from requests.auth import HTTPBasicAuth
+from threading import Lock
 from datetime import datetime
 import pika
 import sys
@@ -10,299 +11,193 @@ import requests
 import pytz
 import json
 
-# Synchronization primitive for thread-safe operations
-subscription_synchronization_lock = Lock()
+subscribe_lock = Lock()
+# broadcast routing key
+BROADCAST_ROUTING_KEY = 'broadcast'
+# Allowed routing keys
+VALID_ROUTING_KEYS = ['internal', 'external']
 
-# Messaging Constants
-GLOBAL_BROADCAST_CHANNEL = 'broadcast'
-AUTHORIZED_MESSAGE_TOPICS = ['internal', 'external']
-
-def discover_active_message_queues():
-    """
-    Retrieve list of active message queues from RabbitMQ management API.
-    
-    Returns:
-        list: Names of active queues
-    """
-    try:
-        queue_discovery_endpoint = "http://localhost:15673/api/queues"
-        api_response = requests.get(
-            queue_discovery_endpoint, 
-            auth=HTTPBasicAuth('guest', 'guest')
-        )
-        
-        if api_response.status_code == 200:
-            queues = api_response.json()
-            return [queue['name'] for queue in queues if queue['name']]
-        
-        logging.error(f"Queue discovery failed: {api_response.text}")
-        return []
-    
-    except requests.RequestException as network_error:
-        logging.error(f"Network error during queue discovery: {network_error}")
+def retrieve_queue_list():
+    url = "http://localhost:15673/api/queues"
+    response = requests.get(url, auth=HTTPBasicAuth('guest', 'guest'))
+    if response.status_code == 200:
+        queues = response.json()
+        return [q['name'] for q in queues if q['name']]  # Filter out any queues without names
+    else:
+        logging.error(f"Failed to fetch queues: {response.text}")
         return []
 
-class PacificTimeFormatter(logging.Formatter):
-    """
-    Custom logging formatter to display timestamps in Pacific Time Zone.
-    """
+class PSTFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
-        pacific_timezone = pytz.timezone('America/Los_Angeles')
-        converted_time = datetime.fromtimestamp(record.created, pacific_timezone)
+        pst_timezone = pytz.timezone('America/Los_Angeles')
+        converted_time = datetime.fromtimestamp(record.created, pst_timezone)
         return converted_time.strftime('%Y-%m-%d %H:%M:%S')
 
-def get_current_pacific_timestamp():
-    """
-    Generate current timestamp in Pacific Time Zone.
-    
-    Returns:
-        str: Formatted timestamp
-    """
-    pacific_timezone = pytz.timezone('America/Los_Angeles')
-    return datetime.now(pacific_timezone).strftime('%Y-%m-%d %H:%M:%S')
+def get_current_time_in_pst():
+    pst_timezone = pytz.timezone('America/Los_Angeles')
+    return datetime.now(pst_timezone).strftime('%Y-%m-%d %H:%M:%S')
 
-# Configure logging based on verbosity
+# Checking for '--verbose' argument; info logs will be displayed only if verbose is passed
 log_level = logging.INFO if '--verbose' in sys.argv else logging.ERROR
-logging.basicConfig(
-    level=log_level, 
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-for log_handler in logging.root.handlers:
-    log_handler.setFormatter(PacificTimeFormatter())
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
-# Suppress werkzeug logs
-logging.getLogger('werkzeug').setLevel(logging.ERROR)
+# Configure logging
+logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(message)s')
+for handler in logging.root.handlers:
+    handler.setFormatter(PSTFormatter())
 
-message_routing_app = Flask(__name__)
+app = Flask(__name__)
 
-# RabbitMQ connection configuration
-rabbitmq_credentials = pika.PlainCredentials('guest', 'guest')
-rabbitmq_connection_params = pika.ConnectionParameters(
+# RabbitMQ setup parameters
+credentials = pika.PlainCredentials('guest', 'guest')
+connection_config = pika.ConnectionParameters(
     host='localhost',
     port=5673,
-    credentials=rabbitmq_credentials,
+    credentials=credentials,
     heartbeat=10
 )
 
-# Tracking active consumer threads
-active_consumer_threads = {}
+# Dictionary to store consumer threads
+consumer_threads = {}
 
-def process_message(queue_name):
-    """
-    Continuous message consumption thread for a specific queue.
-    
-    Args:
-        queue_name (str): Name of the queue to consume messages from
-    """
+def message_consumer(queue_name):
     while True:
         try:
-            # Establish RabbitMQ connection
-            rabbitmq_connection = pika.BlockingConnection(rabbitmq_connection_params)
-            message_channel = rabbitmq_connection.channel()
-            message_channel.basic_qos(prefetch_count=1)
+            connection = pika.BlockingConnection(connection_config)
+            channel = connection.channel()
+            channel.basic_qos(prefetch_count=1)
 
-            def message_handler(channel, method, properties, message_body):
-                """
-                Process and log incoming messages with appropriate formatting.
-                
-                Args:
-                    channel: RabbitMQ channel
-                    method: Delivery method
-                    properties: Message properties
-                    message_body: Raw message content
-                """
-                decoded_message = message_body.decode('utf-8')
-                current_timestamp = get_current_pacific_timestamp()
-
+            def callback(ch, method, properties, body):
+                message = body.decode('utf-8')
                 try:
-                    # Attempt to parse job listing messages
-                    json_message = json.loads(decoded_message)
-                    job_listings = json_message.get("jobs", [])
-                    
-                    # Extract relevant job details
-                    processed_job_listings = [{
-                        "title": job.get("title", ""),
-                        "location": job.get("location", {}).get("name", ""),
-                        "job_url": job.get("absolute_url", ""),
-                        "education_requirement": job.get("education", ""),
-                        "job_id": job.get("id", ""),
-                        "last_updated": job.get("updated_at", "")
-                    } for job in job_listings]
+                    # Parsing messages as JSON string from greenhouse.io
+                    json_message = json.loads(message)
+                    # disaster_data = json_message.get("data", {})
+                    jobs = json_message.get("data", [])
+                    # filtering response
+                    filtered_jobs = [
+                    {
+                        "id": str(job.get("id", "")),
+                        "score": job.get("score"),  # Adding a default score as in the example
+                        "name": job.get('fields', {}).get('name'),
+                        "href": job.get("href", "")
+                    } for job in jobs
+                    ]
 
-                    formatted_job_listings = json.dumps(processed_job_listings, indent=4)
-                    print(f'{current_timestamp} - QUEUE -> {queue_name} new message:\n{formatted_job_listings}')
-                
+                    beautified_json = json.dumps(filtered_jobs, indent=4)
+                    current_time = get_current_time_in_pst()
+                    print(f'{current_time} - USERre -> {queue_name} new message:\n{beautified_json}')
                 except json.JSONDecodeError:
-                    # Fallback for non-JSON messages
-                    print(f'{current_timestamp} - QUEUE -> {queue_name} new message: {decoded_message}')
-                
-                # Acknowledge message processing
-                channel.basic_ack(delivery_tag=method.delivery_tag)
+                    current_time = get_current_time_in_pst()
+                    print(f'{current_time} - USER -> {queue_name} new message: {message}')
+                ch.basic_ack(delivery_tag=method.delivery_tag)
 
-            # Consume messages from the specified queue
-            message_channel.basic_consume(
-                queue=queue_name, 
-                on_message_callback=message_handler
-            )
-            message_channel.start_consuming()
-        
-        except pika.exceptions.AMQPConnectionError as connection_error:
-            logging.error(f'Connection lost, reconnecting in 5 seconds: {connection_error}')
+            channel.basic_consume(queue=queue_name, on_message_callback=callback)
+            channel.start_consuming()
+        except pika.exceptions.AMQPConnectionError as e:
+            logging.error(f'Connection was closed, retrying in 5 seconds: {e}')
             time.sleep(5)
-        
-        except Exception as unexpected_error:
-            logging.error(f'Unexpected error in consumer thread for {queue_name}: {unexpected_error}')
+        except Exception as e:
+            logging.error(f'Unexpected error: {e}, exiting consumer thread for {queue_name}')
             break
-        
         finally:
-            # Ensure connection closure
-            if 'rabbitmq_connection' in locals() and rabbitmq_connection.is_open:
-                rabbitmq_connection.close()
+            if connection.is_open:
+                connection.close()
 
-@message_routing_app.route('/subscribe', methods=['POST'])
-def manage_topic_subscription():
-    """
-    Handle user topic subscription requests.
-    
-    Returns:
-        JSON response with subscription status
-    """
+
+@app.route('/subscribe', methods=['POST'])
+def create_subscription():
     try:
-        request_data = request.json
-        username = request_data.get('username')
-        message_topic = request_data.get('topic')
+        data = request.json
+        username = data.get('username')
+        routing_key = data.get('topic')
+        # Validate username and routing key
+        if not username or not routing_key:
+            logging.error(f"Subscribe error: Missing username or routing key in request")
+            return jsonify({'error': 'Missing username or routing key'}), 400
 
-        # Validate request parameters
-        if not username or not message_topic:
-            logging.error("Subscription request: Missing username or topic")
-            return jsonify({'error': 'Missing username or topic'}), 400
+        # Check if the routing key is allowed
+        if routing_key not in VALID_ROUTING_KEYS:
+            logging.error(f"Subscribe error: Attempt to subscribe to invalid routing key '{routing_key}' by user '{username}'")
+            return jsonify({'error': 'Subscription to this routing key is not allowed'}), 400
 
-        # Validate message topic
-        if message_topic not in AUTHORIZED_MESSAGE_TOPICS:
-            logging.error(f"Invalid topic subscription attempt: {message_topic}")
-            return jsonify({'error': 'Topic subscription not allowed'}), 400
+        connection = pika.BlockingConnection(connection_config)
+        channel = connection.channel()
 
-        # Establish RabbitMQ connection
-        rabbitmq_connection = pika.BlockingConnection(rabbitmq_connection_params)
-        message_channel = rabbitmq_connection.channel()
-
-        # Create and bind queue
         queue_name = username
-        message_channel.queue_declare(queue=queue_name, durable=True, exclusive=False)
-        message_channel.queue_bind(
-            exchange='routing', 
-            queue=queue_name, 
-            routing_key=GLOBAL_BROADCAST_CHANNEL
-        )
+        channel.queue_declare(queue=queue_name, durable=True, exclusive=False)
+        channel.queue_bind(exchange='routing', queue=queue_name, routing_key=BROADCAST_ROUTING_KEY)
+        # locking here when binding; unlocking will be done after this execution.
+        with subscribe_lock:
+            channel.queue_bind(exchange='routing', queue=queue_name, routing_key=routing_key)
 
-        # Thread-safe topic binding
-        with subscription_synchronization_lock:
-            message_channel.queue_bind(
-                exchange='routing', 
-                queue=queue_name, 
-                routing_key=message_topic
-            )
+        channel.close()
+        connection.close()
 
-        message_channel.close()
-        rabbitmq_connection.close()
-
-        # Start consumer thread if not already running
-        if username not in active_consumer_threads:
-            consumer_thread = Thread(target=process_message, args=(username,))
-            active_consumer_threads[username] = consumer_thread
+        if username not in consumer_threads:
+            consumer_thread = Thread(target=message_consumer, args=(username,))
+            consumer_threads[username] = consumer_thread
             consumer_thread.start()
 
-        current_timestamp = get_current_pacific_timestamp()
-        print(f'{current_timestamp} - USER -> {queue_name} subscribed to topic: {message_topic}.')
-        
-        return jsonify({
-            'status': 'subscribed', 
-            'queue': queue_name, 
-            'topic': message_topic
-        }), 200
+        current_time = get_current_time_in_pst()
+        print(f'{current_time} - USER -> {queue_name} subscribed for routing key: {routing_key}.')
+        return jsonify({'status': 'subscribed', 'queue': queue_name, 'routing_key': routing_key}), 200
+    except Exception as e:
+        logging.error(f"Subscription error: {e}")
+        return jsonify({'error': 'Failed to subscribe', 'details': str(e)}), 500
 
-    except Exception as subscription_error:
-        logging.error(f"Subscription processing error: {subscription_error}")
-        return jsonify({
-            'error': 'Subscription failed', 
-            'details': str(subscription_error)
-        }), 500
 
-@message_routing_app.route('/unsubscribe', methods=['POST'])
-def manage_topic_unsubscription():
-    """
-    Handle user topic unsubscription requests.
-    
-    Returns:
-        JSON response with unsubscription status
-    """
-    request_data = request.json
-    username = request_data.get('username')
-    message_topic = request_data.get('topic')
+@app.route('/unsubscribe', methods=['POST'])
+def remove_subscription():
+    data = request.json
+    username = data.get('username')
+    routing_key = data.get('topic')
 
-    # Validate request parameters
-    if not username or not message_topic:
-        logging.error("Unsubscription request: Missing username or topic")
-        return jsonify({'error': 'Missing username or topic'}), 400
+    # Validate username and routing key
+    if not username or not routing_key:
+        logging.error(f"Subscribe error: Missing username or routing key in request")
+        return jsonify({'error': 'Missing username or routing key'}), 400
 
-    # Validate message topic
-    if message_topic not in AUTHORIZED_MESSAGE_TOPICS:
-        logging.error(f"Invalid topic unsubscription attempt: {message_topic}")
-        return jsonify({'error': 'Topic unsubscription not allowed'}), 400
+    # Check if the routing key is allowed
+    if routing_key not in VALID_ROUTING_KEYS:
+        logging.error(f"Subscribe error: Attempt to unsubscribe to invalid routing key '{routing_key}' by user '{username}'")
+        return jsonify({'error': 'Invalid routing key unsubscription is not allowed'}), 400
 
-    # Prevent unsubscribing from broadcast channel
-    if message_topic == GLOBAL_BROADCAST_CHANNEL:
-        current_timestamp = get_current_pacific_timestamp()
-        print(f"{current_timestamp} - USER -> {username} cannot unsubscribe from broadcast topic.")
-        return jsonify({'error': 'Broadcast topic unsubscription is forbidden'}), 400
+    # Check if the routing key is 'broadcast'
+    if routing_key == 'broadcast':
+        current_time = get_current_time_in_pst()
+        print(f"{current_time} - USER -> {username} unsubscribing from the broadcast routing key is not allowed.")
+        return jsonify({'error': 'Unsubscribing from the broadcast routing key is not allowed'}), 400
 
     try:
-        # Establish RabbitMQ connection
-        rabbitmq_connection = pika.BlockingConnection(rabbitmq_connection_params)
-        message_channel = rabbitmq_connection.channel()
+        connection = pika.BlockingConnection(connection_config)
+        channel = connection.channel()
 
-        # Thread-safe topic unbinding
-        with subscription_synchronization_lock:
-            message_channel.queue_unbind(
-                queue=username, 
-                exchange='routing', 
-                routing_key=message_topic
-            )
+        # Unbind the routing key from the user's queue
+        # locking here when unbinding; unlocking will be done after this execution.
+        with subscribe_lock:
+            channel.queue_unbind(queue=username, exchange='routing', routing_key=routing_key)
 
-        message_channel.close()
-        rabbitmq_connection.close()
+        channel.close()
+        connection.close()
+        current_time = get_current_time_in_pst()
+        print(f'{current_time} - USER -> {username} unsubscribed from routing key: {routing_key}.')
+        return jsonify({'status': 'unsubscribed', 'queue': username, 'routing_key': routing_key,
+                        'message': 'Routing key unbound from queue successfully'}), 200
+    except Exception as e:
+        return jsonify({'error': 'Failed to unbind routing key from queue', 'details': str(e)}), 500
 
-        current_timestamp = get_current_pacific_timestamp()
-        print(f'{current_timestamp} - USER -> {username} unsubscribed from topic: {message_topic}.')
-        
-        return jsonify({
-            'status': 'unsubscribed', 
-            'queue': username, 
-            'topic': message_topic,
-            'message': 'Topic successfully unbound'
-        }), 200
-
-    except Exception as unsubscription_error:
-        logging.error(f"Unsubscription processing error: {unsubscription_error}")
-        return jsonify({
-            'error': 'Unsubscription failed', 
-            'details': str(unsubscription_error)
-        }), 500
-
-def initialize_message_consumers_on_startup():
-    """
-    Start consumer threads for existing queues during application startup.
-    """
-    active_queue_names = discover_active_message_queues()
-    for queue_name in active_queue_names:
-        if queue_name not in active_consumer_threads:
-            consumer_thread = Thread(target=process_message, args=(queue_name,))
-            active_consumer_threads[queue_name] = consumer_thread
+def start_consumers_on_startup():
+    queue_names = retrieve_queue_list()
+    for queue_name in queue_names:
+        if queue_name not in consumer_threads:
+            consumer_thread = Thread(target=message_consumer, args=(queue_name,))
+            consumer_threads[queue_name] = consumer_thread
             consumer_thread.start()
-            
-            current_timestamp = get_current_pacific_timestamp()
-            print(f"{current_timestamp} - QUEUE -> {queue_name} consumer activated.")
+            current_time = get_current_time_in_pst()
+            print(f"{current_time} - USER -> {queue_name} is active.")
 
 if __name__ == '__main__':
-    initialize_message_consumers_on_startup()
-    message_routing_app.run(debug=True, port=5001)
+    start_consumers_on_startup()
+    app.run(debug=True, port=5001)
