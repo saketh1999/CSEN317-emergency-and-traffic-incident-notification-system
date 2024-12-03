@@ -29,10 +29,12 @@ class JobPublisherTestSuite(unittest.TestCase):
             json=lambda: {
                 "jobs": [
                     {
-                        "absolute_url": "https://careers.example.com/job/data-science-intern",
-                        "internal_job_id": 5672455002,
-                        "location": {"name": "Remote"},
-                        "title": "Machine Learning Research Intern"
+                        "id": "50910",
+                        "score": 1,
+                        "fields": {
+                            "name": "Benin: Floods - Sep 2021"
+                        },
+                        "href": "https://api.reliefweb.int/v1/disasters/50910"
                     }
                 ]
             }
@@ -40,7 +42,7 @@ class JobPublisherTestSuite(unittest.TestCase):
         
         # Test publishing message for external job topic
         response = self.test_client.post('/publish', json={
-            'message': 'New Job Listing Discovered',
+            'message': 'Disaster Listing Discovered',
             'topic': 'external'
         })
         
@@ -56,9 +58,9 @@ class JobPublisherTestSuite(unittest.TestCase):
         """
         # Test internal topic publishing
         response = self.test_client.post('/publish', json={
-            'message': 'Internal Team Update',
+            'message': 'Internal Bronco Update',
             'topic': 'internal',
-            'events': ['recruitment_cycle', 'candidate_review']
+            'events': ['Heavy Traffic on El Camino', 'Power outage due to accident']
         })
         
         # Validate response

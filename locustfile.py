@@ -15,7 +15,7 @@ class MessageProducerSimulation(HttpUser):
         """
         self.client.post("/publish", json={
             "message": "system notification",
-            "topic": "company_updates",
+            "topic": "internal",
             "events": ["quarterly_review", "team_meeting"]
         })
 
@@ -26,7 +26,7 @@ class MessageProducerSimulation(HttpUser):
         With minimal payload to test basic publishing
         """
         self.client.post("/publish", json={
-            "topic": "partner_communications"
+            "topic": "external",
         })
 
     @task
@@ -51,7 +51,7 @@ class MessageConsumerSimulation(HttpUser):
         Demonstrates topic-based message filtering
         """
         self.client.post("/subscribe", json={
-            "username": "system_operator", 
+            "username": "operator", 
             "topic": "company_updates"
         })
 
@@ -62,6 +62,6 @@ class MessageConsumerSimulation(HttpUser):
         Tests subscription management functionality
         """
         self.client.post("/unsubscribe", json={
-            "username": "system_operator", 
+            "username": "operator", 
             "topic": "company_updates"
         })

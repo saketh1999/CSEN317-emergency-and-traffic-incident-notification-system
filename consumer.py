@@ -74,20 +74,20 @@ def message_consumer(queue_name):
                     # Parsing messages as JSON string from greenhouse.io
                     json_message = json.loads(message)
                     # disaster_data = json_message.get("data", {})
-                    jobs = json_message.get("data", [])
+                    disasters = json_message.get("data", [])
                     # filtering response
-                    filtered_jobs = [
+                    filtered_disasters = [
                     {
-                        "id": str(job.get("id", "")),
-                        "score": job.get("score"),  # Adding a default score as in the example
-                        "name": job.get('fields', {}).get('name'),
-                        "href": job.get("href", "")
-                    } for job in jobs
+                        "id": str(disaster.get("id", "")),
+                        "score": disaster.get("score"),  # Adding a default score as in the example
+                        "name": disaster.get('fields', {}).get('name'),
+                        "href": disaster.get("href", "")
+                    } for disaster in disasters
                     ]
 
-                    beautified_json = json.dumps(filtered_jobs, indent=4)
+                    beautified_json = json.dumps(filtered_disasters, indent=4)
                     current_time = get_current_time_in_pst()
-                    print(f'{current_time} - USERre -> {queue_name} new message:\n{beautified_json}')
+                    print(f'{current_time} - USER -> {queue_name} new message:\n{beautified_json}')
                 except json.JSONDecodeError:
                     current_time = get_current_time_in_pst()
                     print(f'{current_time} - USER -> {queue_name} new message: {message}')
