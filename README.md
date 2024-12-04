@@ -23,7 +23,7 @@ Personalized information delivery
 minikube start
 
 # 3.Move to Kubernets Path
-cd COEN317-BroncoJobAlerts/kuberenetes
+cd CSEN317-emergency-and-traffic-incident-notification-system/K8
 
 # 4.Apply PV, PVC, Deployment, Service
 kubectl apply -f rabbitmq-pv.yaml
@@ -31,7 +31,31 @@ kubectl apply -f rabbitmq-pvc.yaml
 kubectl apply -f rabbitmq-deployment.yaml
 kubectl apply -f rabbitmq-service.yaml
 
-# 5.Commands to check if above objects are created 
+# 5.Port Forwarding to kubernetes service in minikube
+
+## Application Port
+kubectl port-forward svc/rabbitmq-service 5673:5672
+
+## RabbitMQ management UI Port
+kubectl port-forward svc/rabbitmq-service 15673:15672
+
+# 6. Basic check to see if setup is fine
+
+## Try logging into Management UI in browser; username: guest, password: guest
+http://localhost:15673/#
+
+# 7. Check credentials in Producer, Internal, External 
+credentials = pika.PlainCredentials('guest', 'guest')
+connection_parameters = pika.ConnectionParameters('localhost', port=5673, credentials=credentials)
+
+# 8. Run producer and consumer to see everything fine
+-> python3 consumer.py 
+-> for more consumer information logging: python3 consumer.py --verbose
+-> python3 producer.py
+
+
+```
+# Commands to check if above objects are created 
 ## check PV (status should be 'Bound' after PVC is also created).
 kubectl get pv
 
@@ -41,27 +65,7 @@ kubectl get pvc
 ## check deployment (Ready should be 1/1 and Status Should be available)
 kubectl get deployments
 
-# 6.Port Forwarding to kubernetes service in minikube
 
-## Application Port
-kubectl port-forward svc/rabbitmq-service 5673:5672
-
-## RabbitMQ management UI Port
-kubectl port-forward svc/rabbitmq-service 15673:15672
-
-# 7. Basic check to see if setup is fine
-
-## Try logging into Management UI in browser; username: guest, password: guest
-http://localhost:15673/#
-
-# 8. Check credentials in Producer, Internal, External 
-credentials = pika.PlainCredentials('guest', 'guest')
-connection_parameters = pika.ConnectionParameters('localhost', port=5673, credentials=credentials)
-
-# 9. Run producer and consumer to see everything fine
--> python3 consumer.py 
--> for more consumer information logging: python3 consumer.py --verbose
--> python3 producer.py
 ```
 ## API Documentation
 ```
