@@ -69,7 +69,7 @@ kubectl get deployments
 
 ## API Documentation
 ```
-# 1. Producer External: (will be fetched from greenhouse jobs API)
+# 1. Producer External: (will be fetched from disaster API)
 POST: http://127.0.0.1:5000/publish
 {
     "topic": "external"
