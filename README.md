@@ -6,7 +6,10 @@ The Distributed Emergency and Traffic Incident Notification System (DETINS) is a
 
 Benefits
 
-Enhanced road safety
-Improved emergency response
-Efficient traffic management
-Personalized information delivery
+- **Enhanced road safety**
+
+- **Improved emergency response**
+
+- **Efficient traffic management**
+
+- **Personalized information delivery**
